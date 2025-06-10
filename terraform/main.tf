@@ -16,9 +16,28 @@ provider "aws" {
   profile = "mic-plus"
 }
 
+# 最新のAmazon Linux 2 AMIを取得
+data "aws_ami" "amazon_linux" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
 # VPCを作る
 resource "aws_vpc" "metamon_vpc" {
-  cidr_block = "192.168.0.0/16"
+  cidr_block           = "192.168.0.0/16"
+  enable_dns_support   = true  # DNS解決を有効化
+  enable_dns_hostnames = true  # DNSホスト名を有効化
+  
   tags = {
     Name      = "metamon-vpc"
     createdBy = "karibeklo"
@@ -120,11 +139,11 @@ resource "aws_iam_instance_profile" "metamon_instance_profile" {
 
 # EC2インスタンスを作る
 resource "aws_instance" "metamon_ec2" {
-  ami           = "ami-0c55b159cbfafe1f0" # Amazon Linux 2のAMI ID（最新のものを使用）
-  instance_type = "t3.micro"
-  subnet_id     = aws_subnet.metamon_subnet_private1a.id
-  iam_instance_profile = aws_iam_instance_profile.metamon_instance_profile.name
-  security_groups = [aws_security_group.ec2_metamon.name]
+  ami                    = data.aws_ami.amazon_linux.id  # データソースから最新AMI IDを取得
+  instance_type          = "t3.micro"
+  subnet_id              = aws_subnet.metamon_subnet_private1a.id
+  iam_instance_profile   = aws_iam_instance_profile.metamon_instance_profile.name
+  vpc_security_group_ids = [aws_security_group.ec2_metamon.id]  # security_groupsからvpc_security_group_idsに変更
 
   tags = {
     Name      = "metamon-ec2-instance"
@@ -139,6 +158,7 @@ resource "aws_vpc_endpoint" "ssm" {
   vpc_id              = aws_vpc.metamon_vpc.id
   service_name        = "com.amazonaws.ap-northeast-1.ssm"
   vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id, aws_subnet.metamon_subnet_private1c.id]  # subnet_idsを追加
   security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
   private_dns_enabled = true
   
@@ -153,6 +173,7 @@ resource "aws_vpc_endpoint" "ssmmessages" {
   vpc_id              = aws_vpc.metamon_vpc.id
   service_name        = "com.amazonaws.ap-northeast-1.ssmmessages"
   vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id, aws_subnet.metamon_subnet_private1c.id]  # subnet_idsを追加
   security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
   private_dns_enabled = true
   tags = {
@@ -166,6 +187,7 @@ resource "aws_vpc_endpoint" "ec2messages" {
   vpc_id              = aws_vpc.metamon_vpc.id
   service_name        = "com.amazonaws.ap-northeast-1.ec2messages"
   vpc_endpoint_type   = "Interface"
+  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id, aws_subnet.metamon_subnet_private1c.id]  # subnet_idsを追加
   security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
   private_dns_enabled = true
   
@@ -174,4 +196,3 @@ resource "aws_vpc_endpoint" "ec2messages" {
     createdBy = "karibeklo"
   }
 }
-
