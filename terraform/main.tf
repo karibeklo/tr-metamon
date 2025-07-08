@@ -65,14 +65,22 @@ resource "aws_subnet" "metamon_subnet_private1c" {
   }
 }
 
+# DBサブネットグループを作る（RDS用）
+resource "aws_db_subnet_group" "metamon_db_subnet_group" {
+  name       = "metamon-db-subnet-group"
+  subnet_ids = [aws_subnet.metamon_subnet_private1a.id, aws_subnet.metamon_subnet_private1c.id]
+
+  tags = {
+    Name      = "metamon-db-subnet-group"
+    createdBy = "karibeklo"
+  }
+}
+
 # セキュリティグループ - EC2用（SSMアクセス用）
 resource "aws_security_group" "ec2_metamon" {
   name        = "securityGroup-ec2-metamon-SSM"
   description = "Security group for EC2 instances with SSM access"
   vpc_id      = aws_vpc.metamon_vpc.id
-  
-  # SSMを使用する場合、インバウンドルールは基本的に必要ありません
-  # 必要なアプリケーションポートがある場合のみ追加
   
   # アウトバウンドトラフィック許可 - VPCエンドポイントへの接続用
   egress {
@@ -139,11 +147,11 @@ resource "aws_iam_instance_profile" "metamon_instance_profile" {
 
 # EC2インスタンスを作る
 resource "aws_instance" "metamon_ec2" {
-  ami                    = data.aws_ami.amazon_linux.id  # データソースから最新AMI IDを取得
+  ami                    = data.aws_ami.amazon_linux.id
   instance_type          = "t3.micro"
   subnet_id              = aws_subnet.metamon_subnet_private1a.id
   iam_instance_profile   = aws_iam_instance_profile.metamon_instance_profile.name
-  vpc_security_group_ids = [aws_security_group.ec2_metamon.id]  # security_groupsからvpc_security_group_idsに変更
+  vpc_security_group_ids = [aws_security_group.ec2_metamon.id]
 
   tags = {
     Name      = "metamon-ec2-instance"
@@ -158,7 +166,7 @@ resource "aws_vpc_endpoint" "ssm" {
   vpc_id              = aws_vpc.metamon_vpc.id
   service_name        = "com.amazonaws.ap-northeast-1.ssm"
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id, aws_subnet.metamon_subnet_private1c.id]  # subnet_idsを追加
+  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id]
   security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
   private_dns_enabled = true
   
@@ -173,7 +181,7 @@ resource "aws_vpc_endpoint" "ssmmessages" {
   vpc_id              = aws_vpc.metamon_vpc.id
   service_name        = "com.amazonaws.ap-northeast-1.ssmmessages"
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id, aws_subnet.metamon_subnet_private1c.id]  # subnet_idsを追加
+  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id]
   security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
   private_dns_enabled = true
   tags = {
@@ -187,12 +195,108 @@ resource "aws_vpc_endpoint" "ec2messages" {
   vpc_id              = aws_vpc.metamon_vpc.id
   service_name        = "com.amazonaws.ap-northeast-1.ec2messages"
   vpc_endpoint_type   = "Interface"
-  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id, aws_subnet.metamon_subnet_private1c.id]  # subnet_idsを追加
+  subnet_ids          = [aws_subnet.metamon_subnet_private1a.id]
   security_group_ids  = [aws_security_group.vpc_endpoint_sg.id]
   private_dns_enabled = true
   
   tags = {
     Name = "ec2messages-endpoint"
     createdBy = "karibeklo"
+  }
+}
+
+# RDSのセキュリティグループ
+resource "aws_security_group" "rds_SG_metamon" {
+  name        = "securityGroup-rds-metamon"
+  description = "Security group for RDS instances"
+  vpc_id      = aws_vpc.metamon_vpc.id
+  
+  ingress {
+    from_port = 5432
+    to_port = 5432
+    protocol = "TCP"
+    security_groups = [aws_security_group.ec2_metamon.id]  # EC2のセキュリティグループからのアクセスを許可
+  }
+
+  egress {
+  from_port = 0
+  to_port = 0
+  protocol = "-1"  # Allow all protocols.
+  cidr_blocks = ["0.0.0.0/0"]
+}
+
+  tags = {
+    Name = "security-group-rds-metamon"
+    createdBy = "karibeklo"
+  }
+}
+
+# RDSインスタンスを作る
+resource "aws_db_instance" "rds_metamon" {
+  identifier              = "rds-metamon-mysql"
+  engine                  = "mysql"
+  engine_version          = "8.0"
+  allocated_storage       = 20
+  instance_class          = "db.t3.micro"
+  storage_type            = "gp2"
+  db_name                 = "metamondb"
+  username                = "admin"
+  password                = "MetamonMetamon"  # 本番環境では環境変数やシークレットマネージャーを使用してください
+  db_subnet_group_name    = aws_db_subnet_group.metamon_db_subnet_group.name
+  vpc_security_group_ids  = [aws_security_group.rds_SG_metamon.id]
+  skip_final_snapshot     = true
+  backup_retention_period = 0 # バックアップを保持しない設定
+
+  tags = {
+    Name      = "metamon-rds-instance"
+    createdBy = "karibeklo"
+  }
+}
+
+# lambdaのzipファイルを作成する
+data "archive_file" "lambda" {
+  type        = "zip"
+  source_dir  = "./modules/lambda/src"
+  output_path = "./modules/lambda/src/lambda_function_payload.zip"
+}
+
+# IAMロールを作成する
+data "aws_iam_policy_document" "lambda_assume_role_policy" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+# lambda関数を作成する
+resource "aws_lambda_function" "main" {
+  filename         = "./modules/lambda/src/lambda_function_payload.zip"
+  function_name    = "lambda_function"
+  description      = "lambda_function"
+  role             = var.iam_role_lambda
+  architectures    = ["x86_64"]
+  handler          = "index.lambda_handler"
+  source_code_hash = data.archive_file.lambda.output_base64sha256
+  timeout          = 30
+  runtime          = "python3.9"
+
+  vpc_config {
+    subnet_ids         = [var.subnet_public_subnet_1a_id]
+    security_group_ids = [var.sg_lambda_id]
+  }
+
+  environment {
+    variables = {
+      db_host = var.db_address
+      db_user = var.db_username
+      db_pass = var.db_password
+      db_name = var.db_name
+    }
+  }
+  tags = {
+    Name = "${var.app_name}-lamdba"
   }
 }
