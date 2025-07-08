@@ -13,3 +13,9 @@ output "rds_port" {
   description = "RDS instance port"
   value       = aws_db_instance.rds_metamon.port
 }
+
+# API Gatewayのアウトプット
+output "api_gateway_url" {
+  description = "The URL of the API Gateway"
+  value       = "${aws_api_gatewayv2_api.metamon_api.api_endpoint}/metamon"
+}

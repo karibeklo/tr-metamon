@@ -238,7 +238,6 @@ resource "aws_db_instance" "rds_metamon" {
   engine_version          = "8.0"
   allocated_storage       = 20
   instance_class          = "db.t3.micro"
-  storage_type            = "gp2"
   db_name                 = "metamondb"
   username                = "admin"
   password                = "MetamonMetamon"  # 本番環境では環境変数やシークレットマネージャーを使用してください
@@ -253,50 +252,152 @@ resource "aws_db_instance" "rds_metamon" {
   }
 }
 
+### lambda の iamrole を作る
+resource "aws_iam_role" "role_lambda_metamon" {
+  name               = "role_lambda_metamon"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+### Lambda の iam ロールアタッチメント定義
+resource "aws_iam_role_policy_attachment" "role_lambda_metamon_attachment" {
+  role       = aws_iam_role.role_lambda_metamon.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+
+### Lambda の SG を作成
+resource "aws_security_group" "sg_lambda_metamon" {
+  name   = "security-group-lambda-metamon"
+  vpc_id = aws_vpc.metamon_vpc.id
+
+  ingress {
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "TCP"
+    cidr_blocks = ["172.16.0.0/16"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name      = "security-group-lambda-george"
+    createdBy = "kaminagakkq"
+  }
+}
+
+
 # lambdaのzipファイルを作成する
 data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = "./modules/lambda/src"
-  output_path = "./modules/lambda/src/lambda_function_payload.zip"
+  output_path = "./modules/lambda/src/lambda_function.zip"
 }
 
-# IAMロールを作成する
-data "aws_iam_policy_document" "lambda_assume_role_policy" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["lambda.amazonaws.com"]
-    }
-  }
-}
-
-# lambda関数を作成する
-resource "aws_lambda_function" "main" {
-  filename         = "./modules/lambda/src/lambda_function_payload.zip"
-  function_name    = "lambda_function"
-  description      = "lambda_function"
-  role             = var.iam_role_lambda
-  architectures    = ["x86_64"]
-  handler          = "index.lambda_handler"
-  source_code_hash = data.archive_file.lambda.output_base64sha256
-  timeout          = 30
-  runtime          = "python3.9"
-
+### Lambda 関数定義
+resource "aws_lambda_function" "lambda_metamon" {
+  function_name    = "lambda-metamon"
+  runtime          = "python3.13"
+  role             = aws_iam_role.role_lambda_metamon.arn
+  handler          = "lambda_function.lambda_handler"
+  source_code_hash = filebase64sha256("./modules/lambda/src/lambda_function.zip") # ZIPされたコードファイルを指定
+  filename         = "./modules/lambda/src/lambda_function.zip"
   vpc_config {
-    subnet_ids         = [var.subnet_public_subnet_1a_id]
-    security_group_ids = [var.sg_lambda_id]
+    subnet_ids         = [aws_subnet.private_metamon_subnet_private1a.id]
+    security_group_ids = [aws_security_group.sg_lambda_metamon.id]
   }
 
-  environment {
-    variables = {
-      db_host = var.db_address
-      db_user = var.db_username
-      db_pass = var.db_password
-      db_name = var.db_name
-    }
+  tags = {
+    Name      = "lambda-metamon-function"
+    createdBy = "karibeklo"
+  }
+}
+
+### api Gateway の定義
+resource "aws_api_gatewayv2_rest_api" "metamon_api" {
+  name        = "metamon-api"
+  description = "API for Metamon Lambda function"
+  protocol_type = "REST_API"
+
+  cors_configuration {
+    allow_methods = ["GET", "POST"]
+    allow_origins = ["*"]  # 必要に応じて制限してください
+    allow_headers = ["Content-Type", "X-Amz-Date", "Authorization", "X-Api-Key", "X-Amz-Security-Token"]
   }
   tags = {
-    Name = "${var.app_name}-lamdba"
+    Name      = "metamon-api-gateway"
+    createdBy = "karibeklo"
   }
 }
+
+# APIキーの作成
+resource "aws_api_gatewayv2_api_key" "metamon_api_key" {
+  api_id    = aws_api_gatewayv2_api.metamon_api.id
+  name      = "metamon-api-key"
+  enabled   = true
+  stage_key {
+    stage_name = aws_api_gatewayv2_stage.metamon_stage.name
+    api_id     = aws_api_gatewayv2_api.metamon_api.id
+  }
+  tags = {
+    Name      = "metamon-api-key"
+    createdBy = "karibeklo"
+  }
+}
+
+
+# API Gatewayの統合
+resource "aws_api_gatewayv2_integration" "metamon_integration" {
+  api_id             = aws_api_gatewayv2_api.metamon_api.id
+  integration_type   = "AWS_PROXY"
+  integration_uri    = aws_lambda_function.lambda_metamon.invoke_arn
+  integration_method = "POST"
+  payload_format_version = "2.0"
+  timeout_milliseconds = 29000
+  depends_on = [aws_lambda_function.lambda_metamon]  # Lambda関数が作成されてから統合を行う
+  tags = {
+    Name      = "metamon-api-integration"
+    createdBy = "karibeklo"
+  }
+}
+
+# API Gatewayのルート
+resource "aws_api_gatewayv2_route" "metamon_route" {
+  api_id    = aws_api_gatewayv2_api.metamon_api.id
+  route_key = "POST /metamon"
+  target    = "integrations/${aws_api_gatewayv2_integration.metamon_integration.id}"  # 統合IDを指定
+  tags = {
+    Name      = "metamon-api-route"
+    createdBy = "karibeklo"
+  }
+}
+
+# API Gatewayのステージ
+resource "aws_api_gatewayv2_stage" "metamon_stage" {
+  api_id      = aws_api_gatewayv2_api.metamon_api.id
+  name        = "prod"
+  auto_deploy = true
+
+  tags = {
+    Name      = "metamon-api-stage"
+    createdBy = "karibeklo"
+  }
+}
+
+
+
