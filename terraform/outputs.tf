@@ -14,8 +14,15 @@ output "rds_port" {
   value       = aws_db_instance.rds_metamon.port
 }
 
-# API Gatewayのアウトプット
-output "api_gateway_url" {
-  description = "The URL of the API Gateway"
-  value       = "${aws_api_gatewayv2_api.metamon_api.api_endpoint}/metamon"
+# APIキーの値を出力
+output "api_key_value" {
+  value     = aws_api_gateway_api_key.metamon_api_key.value
+  sensitive = true
+  description = "The API key value for accessing the Metamon API"
+}
+
+# API エンドポイントURLを出力
+output "api_endpoint" {
+  value = "https://${aws_api_gateway_rest_api.metamon_api.id}.execute-api.ap-northeast-1.amazonaws.com/prod/metamon"
+  description = "The API endpoint URL"
 }
