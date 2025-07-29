@@ -26,3 +26,9 @@ output "api_endpoint" {
   value = "https://${aws_api_gateway_rest_api.metamon_api.id}.execute-api.ap-northeast-1.amazonaws.com/prod/metamon"
   description = "The API endpoint URL"
 }
+
+# CloudFront Distribution ID
+output "cloudfront_distribution_id" {
+  value = aws_cloudfront_distribution.metamon_distribution.id
+  description = "CloudFront Distribution ID"
+}
