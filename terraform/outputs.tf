@@ -32,3 +32,9 @@ output "cloudfront_distribution_id" {
   value = aws_cloudfront_distribution.metamon_distribution.id
   description = "CloudFront Distribution ID"
 }
+
+# CloudFront エンドポイント（推奨）
+output "cloudfront_endpoint" {
+  value = "https://${aws_cloudfront_distribution.metamon_distribution.domain_name}/metamon"
+  description = "CloudFront endpoint (recommended for production, no API key needed)"
+}
