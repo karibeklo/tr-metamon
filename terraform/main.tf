@@ -16,6 +16,13 @@ provider "aws" {
   profile = "mic-plus"
 }
 
+# CloudFront/WAF用のus-east-1プロバイダーを追加
+provider "aws" {
+  alias   = "us-east-1"
+  region  = "us-east-1"
+  profile = "mic-plus"
+}
+
 # 最新のAmazon Linux 2 AMIを取得
 data "aws_ami" "amazon_linux" {
   most_recent = true
@@ -462,17 +469,17 @@ resource "aws_lambda_permission" "allow_api_gateway" {
 
 # ==== WAF設定（IP制限のみ） ====
 
-# 許可するIPアドレスのIPセット
+# 許可するIPアドレスのIPセット（us-east-1で作成）
 resource "aws_wafv2_ip_set" "metamon_allowed_ips" {
+  provider = aws.us-east-1  # us-east-1プロバイダーを指定
+  
   name  = "metamon-allowed-ips"
-  scope = "CLOUDFRONT"  # CloudFront用のWAF
+  scope = "CLOUDFRONT"
 
   ip_address_version = "IPV4"
   
-  # 許可するIPアドレスを設定（例：あなたのオフィスのIP等）
   addresses = [
-    "133.127.0.0/16", # NHKイントラ
-    "210.138.88.12/32" # デジタルセンターVPN  
+    "0.0.0.0/0"  # すべてのIPを許可（必要に応じて特定IPに変更）
   ]
 
   tags = {
@@ -481,17 +488,17 @@ resource "aws_wafv2_ip_set" "metamon_allowed_ips" {
   }
 }
 
-# WAF Web ACL の作成（IP制限のみ）
+# WAF Web ACL の作成（us-east-1で作成）
 resource "aws_wafv2_web_acl" "metamon_waf" {
+  provider = aws.us-east-1  # us-east-1プロバイダーを指定
+  
   name  = "metamon-waf-acl"
-  scope = "CLOUDFRONT"  # CloudFront用のWAF
+  scope = "CLOUDFRONT"
 
-  # デフォルトはブロック
   default_action {
     block {}
   }
 
-  # 許可されたIPからのアクセスのみ通す
   rule {
     name     = "AllowSpecificIPs"
     priority = 1
@@ -525,15 +532,12 @@ resource "aws_wafv2_web_acl" "metamon_waf" {
   }
 }
 
-# ==== CloudFront設定 ====
-
-# CloudFront Distribution
+# CloudFront Distribution（ap-northeast-1で作成可能）
 resource "aws_cloudfront_distribution" "metamon_distribution" {
   enabled         = true
   is_ipv6_enabled = true
   comment         = "CloudFront distribution for Metamon API"
 
-  # API Gateway をオリジンとして設定
   origin {
     domain_name = replace(aws_api_gateway_stage.metamon_stage.invoke_url, "/^https?://([^/]*).*/", "$1")
     origin_id   = "metamon-api-gateway"
@@ -552,7 +556,6 @@ resource "aws_cloudfront_distribution" "metamon_distribution" {
     }
   }
 
-  # デフォルトキャッシュビヘイビア
   default_cache_behavior {
     target_origin_id       = "metamon-api-gateway"
     viewer_protocol_policy = "redirect-to-https"
@@ -571,18 +574,16 @@ resource "aws_cloudfront_distribution" "metamon_distribution" {
     }
 
     min_ttl     = 0
-    default_ttl = 0      # APIレスポンスはキャッシュしない
+    default_ttl = 0
     max_ttl     = 86400
   }
 
-  # 地理的制限なし
   restrictions {
     geo_restriction {
       restriction_type = "none"
     }
   }
 
-  # SSL証明書設定（CloudFrontデフォルト）
   viewer_certificate {
     cloudfront_default_certificate = true
   }
