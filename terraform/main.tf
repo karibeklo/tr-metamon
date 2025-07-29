@@ -567,7 +567,7 @@ resource "aws_cloudfront_distribution" "metamon_distribution" {
 
     forwarded_values {
       query_string = true
-      headers      = ["Authorization", "X-API-Key"]
+      headers      = ["Authorization"]
 
       cookies {
         forward = "none"
