@@ -479,7 +479,8 @@ resource "aws_wafv2_ip_set" "metamon_allowed_ips" {
   ip_address_version = "IPV4"
   
   addresses = [
-    "0.0.0.0/0"  # すべてのIPを許可（必要に応じて特定IPに変更）
+    "133.127.0.0/16", # NHKイントラ
+    "210.138.88.12/32" # デジタルセンターVPN  
   ]
 
   tags = {
