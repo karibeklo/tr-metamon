@@ -460,3 +460,138 @@ resource "aws_lambda_permission" "allow_api_gateway" {
   source_arn    = "${aws_api_gateway_rest_api.metamon_api.execution_arn}/*/*"
 }
 
+# ==== WAF設定（IP制限のみ） ====
+
+# 許可するIPアドレスのIPセット
+resource "aws_wafv2_ip_set" "metamon_allowed_ips" {
+  name  = "metamon-allowed-ips"
+  scope = "CLOUDFRONT"  # CloudFront用のWAF
+
+  ip_address_version = "IPV4"
+  
+  # 許可するIPアドレスを設定（例：あなたのオフィスのIP等）
+  addresses = [
+    "133.127.0.0/16", # NHKイントラ
+    "210.138.88.12/32" # デジタルセンターVPN  
+  ]
+
+  tags = {
+    Name      = "metamon-allowed-ips"
+    createdBy = "karibeklo"
+  }
+}
+
+# WAF Web ACL の作成（IP制限のみ）
+resource "aws_wafv2_web_acl" "metamon_waf" {
+  name  = "metamon-waf-acl"
+  scope = "CLOUDFRONT"  # CloudFront用のWAF
+
+  # デフォルトはブロック
+  default_action {
+    block {}
+  }
+
+  # 許可されたIPからのアクセスのみ通す
+  rule {
+    name     = "AllowSpecificIPs"
+    priority = 1
+
+    action {
+      allow {}
+    }
+
+    statement {
+      ip_set_reference_statement {
+        arn = aws_wafv2_ip_set.metamon_allowed_ips.arn
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "AllowSpecificIPs"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "metamonWAF"
+    sampled_requests_enabled   = true
+  }
+
+  tags = {
+    Name      = "metamon-waf"
+    createdBy = "karibeklo"
+  }
+}
+
+# ==== CloudFront設定 ====
+
+# CloudFront Distribution
+resource "aws_cloudfront_distribution" "metamon_distribution" {
+  enabled         = true
+  is_ipv6_enabled = true
+  comment         = "CloudFront distribution for Metamon API"
+
+  # API Gateway をオリジンとして設定
+  origin {
+    domain_name = replace(aws_api_gateway_stage.metamon_stage.invoke_url, "/^https?://([^/]*).*/", "$1")
+    origin_id   = "metamon-api-gateway"
+    origin_path = "/prod"
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "https-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+
+    custom_header {
+      name  = "X-API-Key"
+      value = aws_api_gateway_api_key.metamon_api_key.value
+    }
+  }
+
+  # デフォルトキャッシュビヘイビア
+  default_cache_behavior {
+    target_origin_id       = "metamon-api-gateway"
+    viewer_protocol_policy = "redirect-to-https"
+    compress               = true
+
+    allowed_methods = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods  = ["GET", "HEAD"]
+
+    forwarded_values {
+      query_string = true
+      headers      = ["Authorization", "X-API-Key"]
+
+      cookies {
+        forward = "none"
+      }
+    }
+
+    min_ttl     = 0
+    default_ttl = 0      # APIレスポンスはキャッシュしない
+    max_ttl     = 86400
+  }
+
+  # 地理的制限なし
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  # SSL証明書設定（CloudFrontデフォルト）
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+
+  # WAFとの関連付け
+  web_acl_id = aws_wafv2_web_acl.metamon_waf.arn
+
+  tags = {
+    Name      = "metamon-cloudfront"
+    createdBy = "karibeklo"
+  }
+}
