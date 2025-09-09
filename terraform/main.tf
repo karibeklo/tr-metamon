@@ -314,11 +314,33 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc_policy" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
-# lambdaのzipファイルを作成する
+# 依存関係をインストールしてからzipを作成
+resource "null_resource" "install_dependencies" {
+  triggers = {
+    requirements = filemd5("../modules/lambda/src/requirements.txt")
+    source_code  = filemd5("../modules/lambda/src/lambda_function.py")
+  }
+
+  provisioner "local-exec" {
+    command = <<EOF
+      cd ../modules/lambda/src
+      # 既存の依存関係を削除
+      find . -name "*.dist-info" -type d -exec rm -rf {} + 2>/dev/null || true
+      find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+      
+      # 新しい依存関係をインストール
+      pip install -r requirements.txt -t .
+    EOF
+  }
+}
+
+# lambdaのzipファイルを作成する（依存関係インストール後）
 data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = "../modules/lambda/src"
   output_path = "../modules/lambda/src/lambda_function.zip"
+  
+  depends_on = [null_resource.install_dependencies]
 }
 
 ### Lambda 関数定義

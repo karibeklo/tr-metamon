@@ -1,3 +1,4 @@
+# sam-app/src/my-function/handler.py
 import json
 import os
 import mysql.connector
